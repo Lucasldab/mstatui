@@ -1,7 +1,12 @@
-use crate::api::{Api, Listen, TopArtist, TopRecording, TopRelease};
+use crate::api::{Api, Listen, Snapshot, TopArtist, TopRecording, TopRelease};
+use crate::cache;
 use crate::config::{Config, Range};
 use anyhow::Result;
-use std::time::Instant;
+use std::{
+    sync::mpsc::{self, Receiver, Sender, TryRecvError},
+    thread,
+    time::Instant,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -46,16 +51,21 @@ pub struct App {
     pub tracks: Vec<TopRecording>,
     pub releases: Vec<TopRelease>,
     pub total: Option<u64>,
-    pub last_refresh: Instant,
+    pub last_refresh: Option<Instant>,
+    pub fetched_at: i64,
     pub status: String,
+    pub refreshing: bool,
     pub should_quit: bool,
+    tx: Sender<Snapshot>,
+    rx: Receiver<Snapshot>,
 }
 
 impl App {
     pub fn new(cfg: Config) -> Result<Self> {
         let api = Api::new(cfg.token.clone())?;
         let range = cfg.range;
-        Ok(Self {
+        let (tx, rx) = mpsc::channel();
+        let mut app = Self {
             cfg,
             api,
             tab: Tab::Recent,
@@ -67,44 +77,78 @@ impl App {
             tracks: Vec::new(),
             releases: Vec::new(),
             total: None,
-            last_refresh: Instant::now(),
-            status: String::from("loading…"),
+            last_refresh: None,
+            fetched_at: 0,
+            status: String::from("starting…"),
+            refreshing: false,
             should_quit: false,
-        })
+            tx,
+            rx,
+        };
+        if let Some(snap) = cache::load() {
+            app.apply(snap);
+            app.status = String::from("cached — refreshing…");
+        } else {
+            app.status = String::from("no cache — fetching…");
+        }
+        Ok(app)
     }
 
-    pub fn refresh(&mut self) {
-        self.status = format!("refreshing ({})…", self.range.as_str());
-        let user = &self.cfg.username.clone();
-        let range = self.range.as_str();
+    /// Spawn a non-blocking refresh. Snapshot arrives on the channel; the main loop
+    /// drains it each frame.
+    pub fn spawn_refresh(&mut self) {
+        if self.refreshing {
+            return;
+        }
+        self.refreshing = true;
+        let api = self.api.clone();
+        let user = self.cfg.username.clone();
+        let range = self.range.as_str().to_string();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let snap = api.fetch_all(&user, &range);
+            let _ = tx.send(snap);
+        });
+    }
 
-        match self.api.playing_now(user) {
-            Ok(np) => self.now_playing = np,
-            Err(e) => self.status = format!("playing-now: {e}"),
+    /// Pull any pending snapshots from the worker thread and persist to disk.
+    /// Returns true if state changed (caller can repaint).
+    pub fn drain(&mut self) -> bool {
+        let mut changed = false;
+        loop {
+            match self.rx.try_recv() {
+                Ok(snap) => {
+                    let _ = cache::save(&snap);
+                    self.apply(snap);
+                    self.refreshing = false;
+                    changed = true;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
         }
-        match self.api.recent_listens(user, 50) {
-            Ok(v) => self.recent = v,
-            Err(e) => self.status = format!("listens: {e}"),
+        changed
+    }
+
+    fn apply(&mut self, snap: Snapshot) {
+        self.now_playing = snap.now_playing;
+        self.recent = snap.recent;
+        self.artists = snap.artists;
+        self.tracks = snap.tracks;
+        self.releases = snap.releases;
+        if let Some(t) = snap.total {
+            self.total = Some(t);
         }
-        match self.api.top_artists(user, range, 25) {
-            Ok(v) => self.artists = v,
-            Err(e) => self.status = format!("artists: {e}"),
-        }
-        match self.api.top_recordings(user, range, 25) {
-            Ok(v) => self.tracks = v,
-            Err(e) => self.status = format!("tracks: {e}"),
-        }
-        match self.api.top_releases(user, range, 25) {
-            Ok(v) => self.releases = v,
-            Err(e) => self.status = format!("releases: {e}"),
-        }
-        match self.api.total_listens(user) {
-            Ok(n) => self.total = Some(n),
-            Err(_) => {}
-        }
-        self.last_refresh = Instant::now();
-        if !self.status.contains(':') {
-            self.status = format!("ok ({})", self.range.as_str());
+        self.fetched_at = snap.fetched_at;
+        self.last_refresh = Some(Instant::now());
+        self.status = if snap.errors.is_empty() {
+            format!("ok ({})", self.range.as_str())
+        } else {
+            snap.errors.join(" · ")
+        };
+        let max = self.list_len();
+        if max > 0 && self.selected >= max {
+            self.selected = max - 1;
         }
     }
 
@@ -150,7 +194,7 @@ impl App {
 
     pub fn cycle_range(&mut self) {
         self.range = self.range.cycle();
-        self.refresh();
+        self.spawn_refresh();
     }
 
     pub fn open_selected(&self) {

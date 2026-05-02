@@ -112,8 +112,17 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         "  {} quit · {}/{} tabs · {}/{} move · {}/{} top/bot · {} refresh · {} range · ⏎ open  ",
         k.quit, k.prev_tab, k.next_tab, k.up, k.down, k.top, k.bottom, k.refresh, k.toggle_range
     );
+    let badge_color = if app.refreshing { p.warning } else { p.positive };
+    let badge_text = if app.refreshing { " ⟳ " } else { " ● " };
+    let stale = if app.fetched_at > 0 {
+        format!(" data: {}", humanize(app.fetched_at))
+    } else {
+        " data: —".into()
+    };
     let line = Line::from(vec![
+        Span::styled(badge_text, Style::default().fg(p.bg).bg(badge_color).add_modifier(Modifier::BOLD)),
         Span::styled(format!(" {} ", app.status), Style::default().fg(p.fg).bg(p.muted)),
+        Span::styled(stale, Style::default().fg(p.muted)),
         Span::styled(help, Style::default().fg(p.muted)),
     ]);
     f.render_widget(Paragraph::new(line), area);

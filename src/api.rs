@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const UA: &str = concat!("mstatui/", env!("CARGO_PKG_VERSION"), " (https://github.com/Lucasldab/mstatui)");
 const BASE: &str = "https://api.listenbrainz.org/1";
 
+#[derive(Clone)]
 pub struct Api {
     client: Client,
     token: Option<String>,
@@ -70,6 +71,51 @@ impl Api {
         let resp: ListenCountResp = self.get(&format!("/user/{user}/listen-count"))?;
         Ok(resp.payload.count)
     }
+
+    /// Fetch every panel concurrently. Each API call runs in its own thread; partial
+    /// failures keep the rest of the snapshot intact.
+    pub fn fetch_all(&self, user: &str, range: &str) -> Snapshot {
+        std::thread::scope(|s| {
+            let np = s.spawn(|| self.playing_now(user));
+            let rec = s.spawn(|| self.recent_listens(user, 50));
+            let art = s.spawn(|| self.top_artists(user, range, 25));
+            let trk = s.spawn(|| self.top_recordings(user, range, 25));
+            let rel = s.spawn(|| self.top_releases(user, range, 25));
+            let tot = s.spawn(|| self.total_listens(user));
+
+            let mut errors: Vec<String> = Vec::new();
+            let now_playing = match np.join().unwrap() {
+                Ok(v) => v,
+                Err(e) => {
+                    errors.push(format!("playing-now: {e}"));
+                    None
+                }
+            };
+            let recent = match rec.join().unwrap() {
+                Ok(v) => v,
+                Err(e) => {
+                    errors.push(format!("listens: {e}"));
+                    Vec::new()
+                }
+            };
+            let artists = art.join().unwrap().unwrap_or_default();
+            let tracks = trk.join().unwrap().unwrap_or_default();
+            let releases = rel.join().unwrap().unwrap_or_default();
+            let total = tot.join().unwrap().ok();
+
+            Snapshot {
+                now_playing,
+                recent,
+                artists,
+                tracks,
+                releases,
+                total,
+                range: range.to_string(),
+                fetched_at: chrono::Utc::now().timestamp(),
+                errors,
+            }
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,14 +129,14 @@ struct ListensPayload {
     listens: Vec<Listen>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Listen {
     #[serde(default)]
     pub listened_at: i64,
     pub track_metadata: TrackMetadata,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TrackMetadata {
     pub artist_name: String,
     pub track_name: String,
@@ -99,12 +145,12 @@ pub struct TrackMetadata {
     pub mbid_mapping: Option<MbidMapping>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AdditionalInfo {
     pub recording_mbid: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MbidMapping {
     pub recording_mbid: Option<String>,
 }
@@ -120,7 +166,7 @@ struct ArtistsPayload {
     artists: Vec<TopArtist>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct TopArtist {
     pub artist_name: String,
     pub listen_count: u64,
@@ -139,7 +185,7 @@ struct RecordingsPayload {
     recordings: Vec<TopRecording>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct TopRecording {
     pub track_name: String,
     pub artist_name: String,
@@ -159,7 +205,7 @@ struct ReleasesPayload {
     releases: Vec<TopRelease>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct TopRelease {
     pub release_name: String,
     pub artist_name: String,
@@ -176,4 +222,24 @@ struct ListenCountResp {
 #[derive(Debug, Deserialize)]
 struct ListenCountPayload {
     count: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub now_playing: Option<Listen>,
+    #[serde(default)]
+    pub recent: Vec<Listen>,
+    #[serde(default)]
+    pub artists: Vec<TopArtist>,
+    #[serde(default)]
+    pub tracks: Vec<TopRecording>,
+    #[serde(default)]
+    pub releases: Vec<TopRelease>,
+    pub total: Option<u64>,
+    #[serde(default)]
+    pub range: String,
+    #[serde(default)]
+    pub fetched_at: i64,
+    #[serde(default)]
+    pub errors: Vec<String>,
 }

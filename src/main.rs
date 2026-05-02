@@ -1,5 +1,6 @@
 mod api;
 mod app;
+mod cache;
 mod config;
 mod ui;
 
@@ -10,14 +11,14 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::{io, time::Duration};
+use std::{io, time::{Duration, Instant}};
 
 use crate::app::App;
 
 fn main() -> Result<()> {
     let cfg = config::load()?;
     let mut app = App::new(cfg)?;
-    app.refresh();
+    app.spawn_refresh();
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -35,24 +36,34 @@ fn main() -> Result<()> {
 }
 
 fn run<B: ratatui::backend::Backend>(term: &mut Terminal<B>, app: &mut App) -> Result<()> {
-    let tick = if app.cfg.refresh_interval > 0 {
-        Duration::from_secs(app.cfg.refresh_interval)
+    let auto_tick = if app.cfg.refresh_interval > 0 {
+        Some(Duration::from_secs(app.cfg.refresh_interval))
     } else {
-        Duration::from_secs(60 * 60)
+        None
     };
+    let mut last_auto = Instant::now();
 
     loop {
         term.draw(|f| ui::draw(f, app))?;
 
-        if event::poll(tick)? {
+        // Drain the worker channel; any new snapshot triggers a redraw next iteration.
+        let _ = app.drain();
+
+        // Short poll keeps the UI responsive for both keypresses and worker results.
+        if event::poll(Duration::from_millis(50))? {
             if let Event::Key(k) = event::read()? {
                 if k.kind != KeyEventKind::Press {
                     continue;
                 }
                 handle_key(app, k.code, k.modifiers);
             }
-        } else if app.cfg.refresh_interval > 0 {
-            app.refresh();
+        }
+
+        if let Some(tick) = auto_tick {
+            if last_auto.elapsed() >= tick {
+                app.spawn_refresh();
+                last_auto = Instant::now();
+            }
         }
 
         if app.should_quit {
@@ -81,7 +92,7 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
             } else if c == k.bottom {
                 app.jump_bottom();
             } else if c == k.refresh {
-                app.refresh();
+                app.spawn_refresh();
             } else if c == k.toggle_range {
                 app.cycle_range();
             } else if c == 'c' && mods.contains(KeyModifiers::CONTROL) {
