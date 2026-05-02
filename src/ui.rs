@@ -32,13 +32,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let p = &app.cfg.colors;
     let total = app.total.map(|n| format!("{n} listens")).unwrap_or_else(|| "—".into());
     let title = Line::from(vec![
-        Span::styled(" mstatui ", Style::default().fg(p.bg).bg(p.accent).add_modifier(Modifier::BOLD)),
-        Span::raw("  "),
-        Span::styled(&app.cfg.username, Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
-        Span::raw("  "),
-        Span::styled(format!("· {total}"), Style::default().fg(p.muted)),
-        Span::raw("  "),
-        Span::styled(format!("· range: {}", app.range.as_str()), Style::default().fg(p.muted)),
+        Span::styled(" mstatui ", Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
+        Span::styled("· ", Style::default().fg(p.muted)),
+        Span::styled(&app.cfg.username, Style::default().fg(p.accent)),
+        Span::styled(format!("  · {total}"), Style::default().fg(p.muted)),
+        Span::styled(format!("  · {}", app.range.as_str()), Style::default().fg(p.muted)),
     ]);
     let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(p.muted));
     f.render_widget(Paragraph::new(title).block(block), area);
@@ -48,9 +46,9 @@ fn draw_now_playing(f: &mut Frame, app: &App, area: Rect) {
     let p = &app.cfg.colors;
     let line = match &app.now_playing {
         Some(np) => Line::from(vec![
-            Span::styled(" ▸ ", Style::default().fg(p.positive)),
+            Span::styled(" ▸ ", Style::default().fg(p.accent)),
             Span::styled(&np.track_metadata.artist_name, Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
-            Span::raw(" — "),
+            Span::styled(" — ", Style::default().fg(p.muted)),
             Span::styled(&np.track_metadata.track_name, Style::default().fg(p.fg)),
             Span::styled(
                 np.track_metadata.release_name.as_deref().map(|r| format!("  · {r}")).unwrap_or_default(),
@@ -95,7 +93,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().bg(p.muted).fg(p.fg).add_modifier(Modifier::BOLD))
+        .highlight_style(Style::default().bg(p.accent_deep).fg(p.fg).add_modifier(Modifier::BOLD))
         .highlight_symbol(" ▸ ");
 
     let mut state = ListState::default();
@@ -108,31 +106,40 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let p = &app.cfg.colors;
     let k = &app.cfg.keys;
+
+    let mut spans: Vec<Span> = Vec::new();
+
+    // Errors take priority and use the error color.
+    if !app.status.is_empty() {
+        spans.push(Span::styled(format!(" {} ", app.status), Style::default().fg(p.error)));
+        spans.push(Span::styled(" · ", Style::default().fg(p.muted)));
+    }
+
+    let stale = if app.fetched_at > 0 {
+        format!(" updated: {}", humanize(app.fetched_at))
+    } else {
+        " updated: —".into()
+    };
+    spans.push(Span::styled(stale, Style::default().fg(p.muted)));
+
+    if app.refreshing {
+        spans.push(Span::styled(" · refreshing…", Style::default().fg(p.accent)));
+    }
+
     let help = format!(
-        "  {} quit · {}/{} tabs · {}/{} move · {}/{} top/bot · {} refresh · {} range · ⏎ open  ",
+        "    {} quit · {}/{} tabs · {}/{} move · {}/{} top/bot · {} refresh · {} range · ⏎ open  ",
         k.quit, k.prev_tab, k.next_tab, k.up, k.down, k.top, k.bottom, k.refresh, k.toggle_range
     );
-    let badge_color = if app.refreshing { p.warning } else { p.positive };
-    let badge_text = if app.refreshing { " ⟳ " } else { " ● " };
-    let stale = if app.fetched_at > 0 {
-        format!(" data: {}", humanize(app.fetched_at))
-    } else {
-        " data: —".into()
-    };
-    let line = Line::from(vec![
-        Span::styled(badge_text, Style::default().fg(p.bg).bg(badge_color).add_modifier(Modifier::BOLD)),
-        Span::styled(format!(" {} ", app.status), Style::default().fg(p.fg).bg(p.muted)),
-        Span::styled(stale, Style::default().fg(p.muted)),
-        Span::styled(help, Style::default().fg(p.muted)),
-    ]);
-    f.render_widget(Paragraph::new(line), area);
+    spans.push(Span::styled(help, Style::default().fg(p.muted)));
+
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn recent_item<'a>(l: &'a crate::api::Listen, p: &crate::config::Palette) -> ListItem<'a> {
     let when = humanize(l.listened_at);
     let line = Line::from(vec![
         Span::styled(&l.track_metadata.artist_name, Style::default().fg(p.accent)),
-        Span::raw(" — "),
+        Span::styled(" — ", Style::default().fg(p.muted)),
         Span::styled(&l.track_metadata.track_name, Style::default().fg(p.fg)),
         Span::styled(format!("   {when}"), Style::default().fg(p.muted)),
     ]);
@@ -144,11 +151,12 @@ fn artists_items<'a>(v: &'a [crate::api::TopArtist], p: &crate::config::Palette)
     v.iter()
         .enumerate()
         .map(|(i, a)| {
-            let bar = bar(a.listen_count, max, 24);
+            let (filled, track) = bar_parts(a.listen_count, max, 24);
             let line = Line::from(vec![
                 Span::styled(format!("{:>2}. ", i + 1), Style::default().fg(p.muted)),
                 Span::styled(format!("{:<32}", truncate(&a.artist_name, 32)), Style::default().fg(p.accent)),
-                Span::styled(bar, Style::default().fg(p.positive)),
+                Span::styled(filled, Style::default().fg(p.accent)),
+                Span::styled(track, Style::default().fg(p.muted)),
                 Span::styled(format!(" {}", a.listen_count), Style::default().fg(p.fg)),
             ]);
             ListItem::new(line)
@@ -161,12 +169,13 @@ fn tracks_items<'a>(v: &'a [crate::api::TopRecording], p: &crate::config::Palett
     v.iter()
         .enumerate()
         .map(|(i, t)| {
-            let bar = bar(t.listen_count, max, 16);
+            let (filled, track) = bar_parts(t.listen_count, max, 16);
             let line = Line::from(vec![
                 Span::styled(format!("{:>2}. ", i + 1), Style::default().fg(p.muted)),
                 Span::styled(format!("{:<24}", truncate(&t.artist_name, 24)), Style::default().fg(p.accent)),
                 Span::styled(format!("{:<32}", truncate(&t.track_name, 32)), Style::default().fg(p.fg)),
-                Span::styled(bar, Style::default().fg(p.positive)),
+                Span::styled(filled, Style::default().fg(p.accent)),
+                Span::styled(track, Style::default().fg(p.muted)),
                 Span::styled(format!(" {}", t.listen_count), Style::default().fg(p.fg)),
             ]);
             ListItem::new(line)
@@ -179,12 +188,13 @@ fn releases_items<'a>(v: &'a [crate::api::TopRelease], p: &crate::config::Palett
     v.iter()
         .enumerate()
         .map(|(i, r)| {
-            let bar = bar(r.listen_count, max, 16);
+            let (filled, track) = bar_parts(r.listen_count, max, 16);
             let line = Line::from(vec![
                 Span::styled(format!("{:>2}. ", i + 1), Style::default().fg(p.muted)),
                 Span::styled(format!("{:<24}", truncate(&r.artist_name, 24)), Style::default().fg(p.accent)),
                 Span::styled(format!("{:<32}", truncate(&r.release_name, 32)), Style::default().fg(p.fg)),
-                Span::styled(bar, Style::default().fg(p.positive)),
+                Span::styled(filled, Style::default().fg(p.accent)),
+                Span::styled(track, Style::default().fg(p.muted)),
                 Span::styled(format!(" {}", r.listen_count), Style::default().fg(p.fg)),
             ]);
             ListItem::new(line)
@@ -192,19 +202,14 @@ fn releases_items<'a>(v: &'a [crate::api::TopRelease], p: &crate::config::Palett
         .collect()
 }
 
-fn bar(value: u64, max: u64, width: usize) -> String {
+fn bar_parts(value: u64, max: u64, width: usize) -> (String, String) {
     if max == 0 {
-        return String::new();
+        return (String::new(), "·".repeat(width));
     }
     let filled = ((value as f64 / max as f64) * width as f64).round() as usize;
-    let mut s = String::with_capacity(width);
-    for _ in 0..filled {
-        s.push('█');
-    }
-    for _ in filled..width {
-        s.push('·');
-    }
-    s
+    let filled = filled.min(width);
+    let track = width - filled;
+    ("█".repeat(filled), "·".repeat(track))
 }
 
 fn truncate(s: &str, n: usize) -> String {

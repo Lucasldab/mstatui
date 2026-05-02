@@ -84,6 +84,7 @@ impl Default for KeyMap {
 #[derive(Debug, Clone)]
 pub struct Palette {
     pub accent: Color,
+    pub accent_deep: Color,
     pub muted: Color,
     pub positive: Color,
     pub warning: Color,
@@ -95,13 +96,14 @@ pub struct Palette {
 impl Default for Palette {
     fn default() -> Self {
         Self {
-            accent: hex("#bd93f9").unwrap(),
-            muted: hex("#6272a4").unwrap(),
-            positive: hex("#50fa7b").unwrap(),
-            warning: hex("#f1fa8c").unwrap(),
-            error: hex("#ff5555").unwrap(),
-            fg: hex("#f8f8f2").unwrap(),
-            bg: hex("#282a36").unwrap(),
+            accent: hex("#9A6DD7").unwrap(),
+            accent_deep: hex("#5A2A82").unwrap(),
+            muted: hex("#6A6A6A").unwrap(),
+            positive: hex("#9A6DD7").unwrap(),
+            warning: hex("#B83D8E").unwrap(),
+            error: hex("#FF6B6B").unwrap(),
+            fg: hex("#E5E5E5").unwrap(),
+            bg: hex("#0D0D0D").unwrap(),
         }
     }
 }
@@ -154,6 +156,7 @@ pub fn load() -> Result<Config> {
             let c = hex(v).with_context(|| format!("color {k:?}"))?;
             match k.as_str() {
                 "accent" => colors.accent = c,
+                "accent_deep" => colors.accent_deep = c,
                 "muted" => colors.muted = c,
                 "positive" => colors.positive = c,
                 "warning" => colors.warning = c,

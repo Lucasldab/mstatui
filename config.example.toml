@@ -22,11 +22,14 @@ bottom       = "G"
 refresh      = "r"
 toggle_range = "t"
 
+# Default palette mirrors the monochrome purple+pink-on-black theme used by my
+# kitty/quickshell/fuzzel configs. Override any subset.
 [colors]
-accent   = "#bd93f9"
-muted    = "#6272a4"
-positive = "#50fa7b"
-warning  = "#f1fa8c"
-error    = "#ff5555"
-fg       = "#f8f8f2"
-bg       = "#282a36"
+accent      = "#9A6DD7"  # primary purple (titles, bars, now-playing)
+accent_deep = "#5A2A82"  # deep purple (selection background)
+muted       = "#6A6A6A"  # neutral gray (borders, secondary text)
+positive    = "#9A6DD7"  # legacy slot — alias of accent
+warning     = "#B83D8E"  # deep pink (transient states)
+error       = "#FF6B6B"  # red
+fg          = "#E5E5E5"
+bg          = "#0D0D0D"

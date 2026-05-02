@@ -87,10 +87,9 @@ impl App {
         };
         if let Some(snap) = cache::load() {
             app.apply(snap);
-            app.status = String::from("cached — refreshing…");
-        } else {
-            app.status = String::from("no cache — fetching…");
         }
+        // Status stays empty on a healthy boot; refreshing badge in the UI carries the signal.
+        app.status.clear();
         Ok(app)
     }
 
@@ -142,7 +141,7 @@ impl App {
         self.fetched_at = snap.fetched_at;
         self.last_refresh = Some(Instant::now());
         self.status = if snap.errors.is_empty() {
-            format!("ok ({})", self.range.as_str())
+            String::new()
         } else {
             snap.errors.join(" · ")
         };
