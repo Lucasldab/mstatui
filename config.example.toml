@@ -1,0 +1,32 @@
+# mstatui config — copy to ~/.config/mstatui/config.toml
+# Every field is optional. Defaults shown.
+
+# Pulled from ~/.local/share/mpris-scrobbler/credentials [listenbrainz] if absent.
+# username = "ISleeplessI"
+# token    = "00000000-0000-0000-0000-000000000000"
+
+# week | month | year | all
+range = "week"
+
+# Background refresh interval in seconds. 0 = manual refresh only (default).
+refresh_interval = 0
+
+[keys]
+quit         = "q"
+next_tab     = "l"
+prev_tab     = "h"
+down         = "j"
+up           = "k"
+top          = "g"
+bottom       = "G"
+refresh      = "r"
+toggle_range = "t"
+
+[colors]
+accent   = "#bd93f9"
+muted    = "#6272a4"
+positive = "#50fa7b"
+warning  = "#f1fa8c"
+error    = "#ff5555"
+fg       = "#f8f8f2"
+bg       = "#282a36"
